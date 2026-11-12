@@ -1,0 +1,255 @@
+#!/usr/bin/env python3
+"""LAN Vitals Linux metrics server."""
+
+import argparse
+import hmac
+import ipaddress
+import json
+import os
+from pathlib import Path
+import socket
+import socketserver
+import ssl
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+
+DISCOVERY_PORT = 48321
+STREAM_PORT = 48322
+PROBE = b"LAN-VITALS/1 DISCOVER"
+HOST = socket.gethostname()
+
+
+def emit(message):
+    return (json.dumps(message, ensure_ascii=True, separators=(",", ":")) + "\n").encode()
+
+
+def certificate(state):
+    state.mkdir(mode=0o700, parents=True, exist_ok=True)
+    identity = state / "identity.pem"
+    if not identity.exists():
+        with tempfile.TemporaryDirectory(dir=state) as folder:
+            key = Path(folder) / "key.pem"
+            cert = Path(folder) / "cert.pem"
+            subprocess.run([
+                "openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt",
+                "ec_paramgen_curve:prime256v1", "-nodes", "-days", "3650",
+                "-subj", "/CN=lan-vitals.local", "-addext", "subjectAltName=DNS:lan-vitals.local",
+                "-keyout", str(key), "-out", str(cert),
+            ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            combined = Path(folder) / "identity.pem"
+            with combined.open("xb") as output:
+                os.fchmod(output.fileno(), 0o600)
+                output.write(cert.read_bytes() + key.read_bytes())
+            # Publish once, including when two instances start concurrently.
+            try:
+                os.link(combined, identity)
+            except FileExistsError:
+                pass
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.load_cert_chain(identity)
+    fingerprint = subprocess.check_output([
+        "openssl", "x509", "-in", str(identity), "-noout", "-fingerprint", "-sha256",
+    ], text=True).strip().split("=", 1)[1]
+    return context, fingerprint
+
+
+def read_counters():
+    fields = [int(field) for field in Path("/proc/stat").read_text().splitlines()[0].split()[1:9]]
+    interfaces = {}
+    for line in Path("/proc/net/dev").read_text().splitlines()[2:]:
+        name, data = line.split(":", 1)
+        name = name.strip()
+        if name != "lo":
+            counters = data.split()
+            interfaces[name] = (int(counters[0]), int(counters[8]))
+    return sum(fields), sum(fields[3:5]), interfaces
+
+
+def sample(previous, current, elapsed, interfaces, disk_path):
+    total, idle, network = current
+    old_total, old_idle, old_network = previous
+    ticks = total - old_total
+    cpu = 100 * (1 - (idle - old_idle) / ticks) if ticks > 0 else 0
+    memory = {}
+    for line in Path("/proc/meminfo").read_text().splitlines():
+        key, value = line.split(":", 1)
+        if key in {"MemTotal", "MemAvailable"}:
+            memory[key] = int(value.split()[0]) * 1024
+    common = network.keys() & old_network.keys() & interfaces
+    rates = [
+        round(sum(max(0, network[name][i] - old_network[name][i]) for name in common) / elapsed)
+        for i in range(2)
+    ]
+    disk = os.statvfs(disk_path)
+    return emit({
+        "type": "metrics", "host": HOST, "cpu": round(max(0, min(100, cpu)), 1),
+        "cores": os.cpu_count(), "load": round(os.getloadavg()[0], 2),
+        "ram_total": memory["MemTotal"], "ram_used": memory["MemTotal"] - memory["MemAvailable"],
+        "rx": rates[0], "tx": rates[1],
+        "disk_total": disk.f_blocks * disk.f_frsize,
+        "disk_used": (disk.f_blocks - disk.f_bfree) * disk.f_frsize,
+        "disk_free": disk.f_bavail * disk.f_frsize, "disk_path": disk_path,
+        "uptime": int(float(Path("/proc/uptime").read_text().split()[0])),
+    })
+
+
+def lan_interfaces(bind_address):
+    data = json.loads(subprocess.check_output(["ip", "-j", "-4", "address", "show", "up"], timeout=2))
+    return [
+        (link["ifname"], ipaddress.IPv4Interface(f'{entry["local"]}/{entry["prefixlen"]}'))
+        for link in data if "BROADCAST" in link.get("flags", []) and "LOWER_UP" in link.get("flags", [])
+        for entry in link.get("addr_info", [])
+        if entry["prefixlen"] > 0 and (bind_address == "0.0.0.0" or bind_address == entry["local"])
+    ]
+
+
+class Metrics:
+    def __init__(self, bind_address, disk_path):
+        self.bind_address = bind_address
+        self.disk_path = disk_path
+        self.interfaces = lan_interfaces(bind_address)
+        self.condition = threading.Condition()
+        self.sequence = 0
+        self.payload = b""
+
+    def allows(self, peer, local=None):
+        address = ipaddress.IPv4Address(peer)
+        return any(
+            address in interface.network and (local is None or str(interface.ip) == local)
+            for _, interface in self.interfaces
+        )
+
+    def run(self):
+        previous = read_counters()
+        last = time.monotonic()
+        while True:
+            time.sleep(1)
+            try:
+                self.interfaces = lan_interfaces(self.bind_address)
+                current = read_counters()
+                now = time.monotonic()
+                payload = sample(previous, current, now - last,
+                                 {name for name, _ in self.interfaces}, self.disk_path)
+                previous, last = current, now
+                with self.condition:
+                    self.sequence += 1
+                    self.payload = payload
+                    self.condition.notify_all()
+            except (OSError, ValueError, subprocess.SubprocessError) as error:
+                print(f"Collecte des métriques : {error}", file=sys.stderr, flush=True)
+
+
+class StreamHandler(socketserver.BaseRequestHandler):
+    def handle(self):
+        self.request.settimeout(6)
+        try:
+            with self.server.context.wrap_socket(self.request, server_side=True) as stream:
+                stream.settimeout(100)
+                with stream.makefile("rb") as reader:
+                    supplied = json.loads(reader.readline(8193).decode("utf-8"))
+                password = supplied.get("password") if isinstance(supplied, dict) else None
+                if not isinstance(password, str) or not hmac.compare_digest(
+                    password.encode("utf-8"), self.server.password
+                ):
+                    time.sleep(1)
+                    stream.sendall(emit({"type": "denied"}))
+                    return
+                stream.settimeout(6)
+                stream.sendall(emit({"type": "ok"}))
+                metrics = self.server.metrics
+                sequence = 0
+                while True:
+                    with metrics.condition:
+                        if not metrics.condition.wait_for(lambda: metrics.sequence != sequence, timeout=5):
+                            return
+                        sequence, payload = metrics.sequence, metrics.payload
+                    stream.sendall(payload)
+        except (OSError, ValueError, UnicodeError):
+            return
+
+
+class StreamServer(socketserver.ThreadingTCPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
+    def __init__(self, address, context, password, metrics):
+        self.context = context
+        self.password = password
+        self.metrics = metrics
+        self.slots = threading.BoundedSemaphore(16)
+        super().__init__(address, StreamHandler)
+
+    def verify_request(self, request, client_address):
+        return self.metrics.allows(client_address[0], request.getsockname()[0])
+
+    def process_request(self, request, client_address):
+        if not self.slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self.slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.slots.release()
+
+
+def discover(listener, metrics, port):
+    response = emit({"type": "LAN-VITALS/1", "host": HOST, "port": port})
+    while True:
+        packet, peer = listener.recvfrom(256)
+        if packet == PROBE and metrics.allows(peer[0]):
+            try:
+                listener.sendto(response, peer)
+            except OSError:
+                continue
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Diffuse les métriques Linux sur le réseau local.")
+    parser.add_argument("--password", default=os.environ.get("LAN_VITALS_PASSWORD"), help="mot de passe partagé")
+    parser.add_argument("--bind", default="0.0.0.0", type=lambda value: str(ipaddress.IPv4Address(value)),
+                        help="adresse IPv4 d'écoute TCP, toutes par défaut")
+    parser.add_argument("--port", default=STREAM_PORT, type=int, help="port TCP, annoncé automatiquement")
+    parser.add_argument("--disk", default="/", type=lambda value: str(Path(value).resolve()),
+                        help="chemin sur le système de fichiers à surveiller")
+    parser.add_argument("--state-dir", type=Path, default=Path(
+        os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "lan-vitals",
+        help="répertoire de l'identité TLS")
+    args = parser.parse_args()
+    if not args.password or len(args.password) > 256:
+        parser.error("fournir un mot de passe de 1 à 256 caractères")
+    if not 1 <= args.port <= 65535:
+        parser.error("le port TCP doit être compris entre 1 et 65535")
+    try:
+        os.statvfs(args.disk)
+        metrics = Metrics(args.bind, args.disk)
+        context, fingerprint = certificate(args.state_dir)
+        with StreamServer((args.bind, args.port), context, args.password.encode(), metrics) as server:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as listener:
+                listener.bind(("", DISCOVERY_PORT))
+                threading.Thread(target=metrics.run, daemon=True).start()
+                threading.Thread(target=discover, args=(listener, metrics, args.port), daemon=True).start()
+                print(f"LAN Vitals | {HOST} | UDP {DISCOVERY_PORT} | TCP {args.port}", flush=True)
+                print(f"Empreinte d’appairage : {fingerprint[:35]}", flush=True)
+                if not metrics.interfaces:
+                    print("Aucune interface IPv4 active compatible avec cette adresse d'écoute.", flush=True)
+                server.serve_forever()
+    except KeyboardInterrupt:
+        return 0
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        parser.exit(1, f"Erreur : {error}\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,6 @@
+/android/build/
+__pycache__/
+*.apk
+*.idsig
+*.p12
+*.pem
