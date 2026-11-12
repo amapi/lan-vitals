@@ -129,6 +129,23 @@ def verify_disk_rates():
     assert (disk["busy"], disk["queue"], disk["in_flight"]) == (25, 1, 1)
 
 
+def verify_missing_commands():
+    with tempfile.TemporaryDirectory(prefix="lan-vitals-dependencies-") as directory:
+        config = Path(directory) / "config.json"
+        state = Path(directory) / "state"
+        for language, heading in (("fr", "Prérequis non satisfaits"), ("en", "Unmet requirements")):
+            result = subprocess.run(
+                [sys.executable, str(ROOT / "lan-vitals-server"), "--lang", language,
+                 "--config", str(config), "--state-dir", str(state)],
+                env={**os.environ, "PATH": directory}, capture_output=True, text=True, timeout=5,
+            )
+            assert result.returncode == 1 and not result.stdout
+            for message in (heading, "iproute2", "util-linux", "openssl"):
+                assert message in result.stderr, result.stderr
+            assert not config.exists() and not state.exists()
+
+
 if __name__ == "__main__":
+    verify_missing_commands()
     verify_disk_rates()
     smoke()

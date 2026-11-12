@@ -6,7 +6,7 @@ An Android dashboard for monitoring a Linux PC on the same local network. Metric
 
 ## Getting started
 
-1. Download the Linux server and signed APK from [Releases](https://github.com/amapi/lan-vitals/releases). The server uses Python 3, OpenSSL 1.1.1 or later, `ip` (iproute2), and `lsblk` (util-linux). The APK requires Android 6.0 or later.
+1. Download the Linux server and signed APK from [Releases](https://github.com/amapi/lan-vitals/releases). The server uses Python 3.7 or later, OpenSSL 1.1.1 or later, `ip` (iproute2), and `lsblk` (util-linux). The APK requires Android 6.0 or later.
 2. On the PC, start the server with your password.
 
    ```bash
@@ -28,6 +28,8 @@ An Android dashboard for monitoring a Linux PC on the same local network. Metric
 Use the 🇫🇷 and 🇬🇧 flags to switch the app language immediately. The client remembers the language and, after authentication, the password encrypted with an Android Keystore key. It reconnects automatically on launch. Use **Disconnect** to return to the sign-in screen and **Forget pairing** to clear the saved password and fingerprint.
 
 ## Server configuration
+
+Before announcing startup, the server checks its dependencies, access to `/proc`, metrics collection, the TLS identity, and whether it can open its ports. It lists missing commands with their package names and reports the failing step if a check fails.
 
 After a successful start, the server saves its settings to `$XDG_CONFIG_HOME/lan-vitals/config.json` or, by default, `~/.config/lan-vitals/config.json`. It creates this private file with mode `0600`. The file contains a salted PBKDF2-SHA-256 verifier. Start the server without arguments to reuse the default configuration. Command-line options override saved settings. For the password, `--password` takes precedence over `LAN_VITALS_PASSWORD`, which takes precedence over the configuration.
 

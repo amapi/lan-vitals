@@ -8,9 +8,9 @@ import ipaddress
 import json
 import os
 from pathlib import Path
+import shutil
 import socket
 import socketserver
-import ssl
 import stat
 import subprocess
 import sys
@@ -18,10 +18,56 @@ import tempfile
 import threading
 import time
 
+try:
+    import ssl
+except ImportError:
+    ssl = None
+
 DISCOVERY_PORT = 48321
 STREAM_PORT = 48322
 PROBE = b"LAN-VITALS/1 DISCOVER"
 HOST = socket.gethostname()
+
+
+class StartupError(Exception):
+    pass
+
+
+def check_requirements(t):
+    problems = []
+    if sys.platform != "linux":
+        problems.append(t("Un système Linux est requis.", "A Linux system is required."))
+    if sys.version_info < (3, 7):
+        problems.append(t("Python 3.7 ou ultérieur est requis.", "Python 3.7 or later is required."))
+    tls_available = any(getattr(ssl, flag, False) for flag in ("HAS_TLSv1_2", "HAS_TLSv1_3"))
+    if not tls_available or not hasattr(hashlib, "pbkdf2_hmac"):
+        problems.append(t("Python doit fournir TLS 1.2 ou 1.3, ainsi que PBKDF2.",
+                          "Python must provide TLS 1.2 or 1.3, and PBKDF2."))
+    for command, package in (("ip", "iproute2"), ("lsblk", "util-linux"), ("openssl", "openssl")):
+        if shutil.which(command) is None:
+            problems.append(t(f"Commande introuvable : {command} (paquet {package}).",
+                              f"Command not found: {command} ({package} package)."))
+    if sys.platform == "linux":
+        for path in ("/proc/stat", "/proc/net/dev", "/proc/diskstats", "/proc/meminfo", "/proc/uptime"):
+            try:
+                with open(path, "rb") as source:
+                    source.read(1)
+            except OSError as error:
+                problems.append(t(f"Source de métriques illisible : {path} ({error.strerror}).",
+                                  f"Cannot read metrics source: {path} ({error.strerror})."))
+    if problems:
+        heading = t("Prérequis non satisfaits", "Unmet requirements")
+        raise StartupError(f"{heading}:\n- " + "\n- ".join(problems))
+
+
+def startup_check(label, operation, *args):
+    try:
+        return operation(*args)
+    except (OSError, ValueError, TypeError, KeyError, IndexError, subprocess.SubprocessError) as error:
+        stderr = getattr(error, "stderr", None) or ""
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode(errors="replace")
+        raise StartupError(f"{label}: {stderr.strip() or error}") from error
 
 
 def emit(message):
@@ -40,7 +86,7 @@ def certificate(state):
                 "ec_paramgen_curve:prime256v1", "-nodes", "-days", "3650",
                 "-subj", "/CN=lan-vitals.local", "-addext", "subjectAltName=DNS:lan-vitals.local",
                 "-keyout", str(key), "-out", str(cert),
-            ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=10)
             combined = Path(folder) / "identity.pem"
             with combined.open("xb") as output:
                 os.fchmod(output.fileno(), 0o600)
@@ -56,7 +102,7 @@ def certificate(state):
     context.load_cert_chain(identity)
     fingerprint = subprocess.check_output([
         "openssl", "x509", "-in", str(identity), "-noout", "-fingerprint", "-sha256",
-    ], text=True).strip().split("=", 1)[1]
+    ], text=True, timeout=5).strip().split("=", 1)[1]
     return context, fingerprint
 
 
@@ -178,7 +224,10 @@ def sample(previous, current, elapsed, interfaces, links, devices, disk_path):
 
 
 def read_links():
-    return json.loads(subprocess.check_output(["ip", "-j", "address", "show"], timeout=2))
+    links = json.loads(subprocess.check_output(["ip", "-j", "address", "show"], timeout=2))
+    if not isinstance(links, list):
+        raise ValueError("Format JSON inattendu / Unexpected JSON format")
+    return links
 
 
 def lan_interfaces(links, bind_address):
@@ -192,12 +241,13 @@ def lan_interfaces(links, bind_address):
 
 
 class Metrics:
-    def __init__(self, bind_address, disk_path, language):
+    def __init__(self, bind_address, disk_path, language, links, devices, counters):
         self.bind_address = bind_address
         self.disk_path = disk_path
         self.language = language
-        self.interfaces = lan_interfaces(read_links(), bind_address)
-        self.devices = disk_inventory()
+        self.interfaces = lan_interfaces(links, bind_address)
+        self.devices = devices
+        self.initial_counters = counters, time.monotonic()
         self.condition = threading.Condition()
         self.sequence = 0
         self.payloads = (b"", b"")
@@ -210,8 +260,7 @@ class Metrics:
         )
 
     def run(self):
-        previous = read_counters()
-        last = time.monotonic()
+        previous, last = self.initial_counters
         while True:
             time.sleep(1)
             try:
@@ -390,6 +439,7 @@ def main():
     if not isinstance(args.port, int) or not 1 <= args.port <= 65535:
         parser.error(t("le port TCP doit être compris entre 1 et 65535", "TCP port must be between 1 and 65535"))
     try:
+        check_requirements(t)
         if args.password is not None:
             if not 1 <= len(args.password) <= 256:
                 parser.error(t("fournir un mot de passe de 1 à 256 caractères", "provide a password of 1 to 256 characters"))
@@ -408,14 +458,27 @@ def main():
         state_dir = args.state_dir.expanduser().resolve()
         desired = {"version": 1, "lang": language, "bind": bind_address, "port": args.port,
                    "disk": disk_path, "state_dir": str(state_dir), "salt": salt.hex(), "verifier": verifier.hex()}
-        os.statvfs(disk_path)
-        metrics = Metrics(bind_address, disk_path, language)
-        context, fingerprint = certificate(state_dir)
-        with StreamServer((bind_address, args.port), context, salt, verifier, metrics) as server:
+        startup_check(t(f"Système de fichiers (--disk {disk_path})", f"Filesystem (--disk {disk_path})"),
+                      os.statvfs, disk_path)
+        links = startup_check(t("Interfaces réseau (ip -j)", "Network interfaces (ip -j)"), read_links)
+        devices = startup_check(t("Inventaire des disques (lsblk --json)", "Disk inventory (lsblk --json)"),
+                                disk_inventory)
+        counters = startup_check(t("Compteurs Linux dans /proc", "Linux counters in /proc"), read_counters)
+        metrics = startup_check(t("Initialisation des métriques", "Metrics initialization"), Metrics,
+                                bind_address, disk_path, language, links, devices, counters)
+        startup_check(t("Premier relevé des métriques", "Initial metrics sample"), sample, counters, counters,
+                      1, {name for name, _ in metrics.interfaces}, links, devices, disk_path)
+        context, fingerprint = startup_check(t(f"Identité TLS ({state_dir})", f"TLS identity ({state_dir})"),
+                                             certificate, state_dir)
+        endpoint = f"TCP {bind_address}:{args.port}"
+        with startup_check(t(f"Écoute {endpoint}", f"Listening on {endpoint}"),
+                           StreamServer, (bind_address, args.port), context, salt, verifier, metrics) as server:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as listener:
-                listener.bind(("", DISCOVERY_PORT))
+                startup_check(t(f"Découverte UDP {DISCOVERY_PORT}", f"UDP discovery on port {DISCOVERY_PORT}"),
+                              listener.bind, ("", DISCOVERY_PORT))
                 if config != desired:
-                    save_config(path, desired)
+                    startup_check(t(f"Écriture de la configuration ({path})", f"Writing configuration ({path})"),
+                                  save_config, path, desired)
                 threading.Thread(target=metrics.run, daemon=True).start()
                 threading.Thread(target=discover, args=(listener, metrics, args.port), daemon=True).start()
                 print(f"LAN Vitals | {HOST} | UDP {DISCOVERY_PORT} | TCP {args.port}", flush=True)
@@ -428,7 +491,7 @@ def main():
                 server.serve_forever()
     except KeyboardInterrupt:
         return 0
-    except (OSError, TypeError, ValueError, subprocess.SubprocessError) as error:
+    except (StartupError, OSError, TypeError, ValueError, subprocess.SubprocessError) as error:
         parser.exit(1, f"{t('Erreur', 'Error')}: {error}\n")
     return 0
 

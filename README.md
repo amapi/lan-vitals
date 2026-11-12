@@ -6,7 +6,7 @@ Tableau de bord Android pour suivre un PC Linux sur le même réseau local. Les 
 
 ## Démarrage
 
-1. Téléchargez le serveur Linux et l’APK signé depuis [Releases](https://github.com/amapi/lan-vitals/releases). Le serveur utilise Python 3, OpenSSL 1.1.1 ou ultérieur, `ip` (iproute2) et `lsblk` (util-linux). L’APK requiert Android 6.0 ou ultérieur.
+1. Téléchargez le serveur Linux et l’APK signé depuis [Releases](https://github.com/amapi/lan-vitals/releases). Le serveur utilise Python 3.7 ou ultérieur, OpenSSL 1.1.1 ou ultérieur, `ip` (iproute2) et `lsblk` (util-linux). L’APK requiert Android 6.0 ou ultérieur.
 2. Sur le PC, lancez le serveur avec votre mot de passe.
 
    ```bash
@@ -28,6 +28,8 @@ Tableau de bord Android pour suivre un PC Linux sur le même réseau local. Les 
 Les drapeaux 🇫🇷 et 🇬🇧 changent la langue de l’application immédiatement. Le client mémorise la langue et, après authentification, le mot de passe chiffré avec une clé Android Keystore. Il se reconnecte automatiquement au lancement. Utilisez **Déconnecter** pour revenir à l’écran de connexion et **Oublier l’appairage** pour effacer le mot de passe et l’empreinte mémorisés.
 
 ## Configuration du serveur
+
+Avant d’annoncer son démarrage, le serveur vérifie ses dépendances, l’accès à `/proc`, la collecte des métriques, l’identité TLS et l’ouverture des ports. Il liste les commandes manquantes avec leurs noms de paquet et indique l’étape en cause si un contrôle échoue.
 
 Après un démarrage réussi, le serveur enregistre ses paramètres dans `$XDG_CONFIG_HOME/lan-vitals/config.json` ou, par défaut, `~/.config/lan-vitals/config.json`. Ce fichier privé est créé avec le mode `0600`. Il contient un vérificateur salé PBKDF2-SHA-256 et aucun mot de passe en clair. Relancez le serveur sans argument pour réutiliser la configuration par défaut. Une option fournie sur la ligne de commande remplace la valeur mémorisée. Pour le mot de passe, `--password` est prioritaire sur `LAN_VITALS_PASSWORD`, qui est prioritaire sur la configuration.
 
