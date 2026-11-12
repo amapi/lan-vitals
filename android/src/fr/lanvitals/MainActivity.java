@@ -6,10 +6,8 @@ import android.content.Context;
 import android.content.res.Configuration;
 import android.graphics.Canvas;
 import android.graphics.Color;
-import android.graphics.LinearGradient;
 import android.graphics.Paint;
 import android.graphics.Path;
-import android.graphics.Shader;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.ConnectivityManager;
@@ -41,6 +39,8 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
+import fr.lanvitals.DashboardHistory.Metric;
+
 public final class MainActivity extends Activity {
     private static final int BACKGROUND = 0xff0a121e;
     private static final int PANEL = 0xff101d2d;
@@ -51,7 +51,6 @@ public final class MainActivity extends Activity {
     private static final int BLUE = 0xff77b9ff;
     private static final int PURPLE = 0xffc9a9ff;
     private static final int AMBER = 0xffffca86;
-    private static final int HISTORY = 60;
 
     private Session session;
     private LinearLayout screen;
@@ -60,9 +59,7 @@ public final class MainActivity extends Activity {
     private EditText password;
     private AlertDialog dialog;
     private JSONObject latest;
-    private final double[][] history = new double[4][HISTORY];
-    private int samples;
-    private int next;
+    private final DashboardHistory history = new DashboardHistory();
     private Card cpu, ram, network, disk;
     private TextView host, uptime;
     private boolean dashboard;
@@ -206,7 +203,7 @@ public final class MainActivity extends Activity {
         page = Page.DASHBOARD;
         loginMessage = message;
         latest = null;
-        next = samples = 0;
+        history.clear();
         getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         setup(true);
         ImageView icon = new ImageView(this);
@@ -328,10 +325,16 @@ public final class MainActivity extends Activity {
         info.addView(uptime);
         add(screen, info, 10);
 
-        cpu = new Card(tr(R.string.cpu), TEAL, new Chart(0, -1, TEAL, BLUE, true));
-        ram = new Card(tr(R.string.memory), PURPLE, new Chart(1, -1, PURPLE, BLUE, true));
-        network = new Card(tr(R.string.network), BLUE, new Chart(2, 3, BLUE, AMBER, false));
-        disk = new Card(tr(R.string.storage), AMBER, null);
+        cpu = new Card(tr(R.string.cpu), TEAL, false,
+                new Plot(R.string.cpu_utilization, Scale.PERCENT, Line.CPU),
+                new Plot(R.string.cpu_load, Scale.LOAD, Line.LOAD));
+        ram = new Card(tr(R.string.memory), PURPLE, false,
+                new Plot(R.string.ram_percent, Scale.PERCENT, Line.RAM_USED, Line.RAM_SHARED, Line.RAM_CACHE));
+        network = new Card(tr(R.string.network), BLUE, false,
+                new Plot(R.string.throughput, Scale.RATE, Line.NETWORK_RX, Line.NETWORK_TX));
+        disk = new Card(tr(R.string.storage), AMBER, true,
+                new Plot(R.string.disk_throughput, Scale.RATE, Line.DISK_READ, Line.DISK_WRITE),
+                new Plot(R.string.disk_latency, Scale.MILLIS, Line.DISK_READ_DELAY, Line.DISK_WRITE_DELAY));
         openOnClick(ram, Page.MEMORY);
         openOnClick(network, Page.NETWORK);
         openOnClick(disk, Page.STORAGE);
@@ -355,14 +358,7 @@ public final class MainActivity extends Activity {
 
     private void receive(JSONObject values) {
         latest = values;
-        double used = values.optLong("ram_used");
-        double total = values.optLong("ram_total");
-        history[0][next] = values.optDouble("cpu", 0);
-        history[1][next] = percentage(used, total);
-        history[2][next] = values.optDouble("rx", 0);
-        history[3][next] = values.optDouble("tx", 0);
-        samples = Math.min(samples + 1, HISTORY);
-        next = (next + 1) % HISTORY;
+        history.add(values);
         live = true;
         connectionStatus = R.string.live;
         if (!dashboard) showDashboard();
@@ -380,8 +376,7 @@ public final class MainActivity extends Activity {
         String elapsed = hours >= 24 ? tr(R.string.days_hours, hours / 24, hours % 24)
                 : hours > 0 ? tr(R.string.hours_minutes, hours, seconds / 60 % 60) : tr(R.string.minutes, seconds / 60);
         uptime.setText(tr(R.string.uptime, elapsed));
-        cpu.update(percent(data.optDouble("cpu", 0)), tr(R.string.cpu_details,
-                data.optInt("cores"), String.format(locale, "%.2f", data.optDouble("load", 0))));
+        cpu.update(percent(data.optDouble("cpu", 0)), tr(R.string.cpu_details, data.optInt("cores")));
         long ramUsed = data.optLong("ram_used"), ramTotal = data.optLong("ram_total");
         ram.update(percent(percentage(ramUsed, ramTotal)), tr(R.string.ram_details, size(ramUsed), size(ramTotal)));
         network.update("↓ " + speed(data.optLong("rx")), tr(R.string.send, speed(data.optLong("tx"))));
@@ -751,12 +746,12 @@ public final class MainActivity extends Activity {
 
     private final class Card extends LinearLayout {
         final TextView value, details, indicator;
-        final Chart chart;
+        final Plot[] plots;
         final Gauge gauge;
 
-        Card(String title, int accent, Chart chart) {
+        Card(String title, int accent, boolean showGauge, Plot... plots) {
             super(MainActivity.this);
-            this.chart = chart;
+            this.plots = plots;
             setOrientation(VERTICAL);
             setPadding(dp(19), dp(16), dp(19), dp(15));
             setBackground(shape(PANEL, BORDER, 18));
@@ -772,16 +767,28 @@ public final class MainActivity extends Activity {
             details = label("", 13, MUTED, false);
             if (accent == BLUE) details.setTextColor(AMBER);
             add(this, details, 4);
-            gauge = chart == null ? new Gauge() : null;
-            LinearLayout.LayoutParams plot = new LinearLayout.LayoutParams(-1, dp(66));
-            plot.topMargin = dp(15);
-            addView(chart != null ? chart : gauge, plot);
+            gauge = showGauge ? new Gauge() : null;
+            if (gauge != null) {
+                LinearLayout.LayoutParams bar = new LinearLayout.LayoutParams(-1, dp(12));
+                bar.topMargin = dp(8);
+                addView(gauge, bar);
+            }
+            if (plots.length == 2 && wide() && getResources().getConfiguration().fontScale <= 1.3f) {
+                LinearLayout charts = new LinearLayout(MainActivity.this);
+                LinearLayout.LayoutParams left = new LinearLayout.LayoutParams(0, -2, 1);
+                left.rightMargin = dp(14);
+                charts.addView(plots[0], left);
+                charts.addView(plots[1], new LinearLayout.LayoutParams(0, -2, 1));
+                add(this, charts, 15);
+            } else {
+                for (Plot plot : plots) add(this, plot, 15);
+            }
         }
 
         void update(String number, String description) {
-            value.setText(number);
-            details.setText(description);
-            if (chart != null) chart.invalidate();
+            setTextIfChanged(value, number);
+            setTextIfChanged(details, description);
+            for (Plot plot : plots) plot.update();
         }
 
         void makeInteractive(Runnable action) {
@@ -806,70 +813,160 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private enum Line {
+        CPU(Metric.CPU, R.string.series_used, TEAL),
+        LOAD(Metric.LOAD, R.string.series_load, AMBER),
+        RAM_USED(Metric.RAM_USED, R.string.series_used, PURPLE),
+        RAM_SHARED(Metric.RAM_SHARED, R.string.series_shared, TEAL),
+        RAM_CACHE(Metric.RAM_CACHE, R.string.series_cache, AMBER),
+        NETWORK_RX(Metric.NETWORK_RX, R.string.download, BLUE),
+        NETWORK_TX(Metric.NETWORK_TX, R.string.upload, AMBER),
+        DISK_READ(Metric.DISK_READ, R.string.read, BLUE),
+        DISK_WRITE(Metric.DISK_WRITE, R.string.write, AMBER),
+        DISK_READ_DELAY(Metric.DISK_READ_DELAY, R.string.read, BLUE),
+        DISK_WRITE_DELAY(Metric.DISK_WRITE_DELAY, R.string.write, AMBER);
+
+        final Metric metric;
+        final int label;
+        final int color;
+
+        Line(Metric metric, int label, int color) {
+            this.metric = metric;
+            this.label = label;
+            this.color = color;
+        }
+    }
+
+    private enum Scale {
+        PERCENT(100), RATE(1024), LOAD(1), MILLIS(1);
+
+        final double minimum;
+
+        Scale(double minimum) {
+            this.minimum = minimum;
+        }
+    }
+
+    private final class Plot extends LinearLayout {
+        final Line[] lines;
+        final Scale scale;
+        final TextView upperBound;
+        final TextView[] readings;
+        final Chart chart;
+
+        Plot(int title, Scale scale, Line... lines) {
+            super(MainActivity.this);
+            this.lines = lines;
+            this.scale = scale;
+            setOrientation(VERTICAL);
+            LinearLayout header = new LinearLayout(MainActivity.this);
+            header.addView(label(tr(title), 12, TEXT, true), new LinearLayout.LayoutParams(0, -2, 1));
+            upperBound = label("", 11, MUTED, false);
+            upperBound.setPadding(dp(4), 0, 0, 0);
+            upperBound.setGravity(Gravity.END);
+            header.addView(upperBound);
+            add(this, header, 0);
+
+            chart = new Chart(lines);
+            LinearLayout.LayoutParams graph = new LinearLayout.LayoutParams(-1, dp(66));
+            graph.topMargin = dp(5);
+            addView(chart, graph);
+
+            LinearLayout legend = new LinearLayout(MainActivity.this);
+            readings = new TextView[lines.length];
+            for (int i = 0; i < lines.length; i++) {
+                Line line = lines[i];
+                LinearLayout key = vertical();
+                LinearLayout.LayoutParams column = new LinearLayout.LayoutParams(0, -2, 1);
+                if (i > 0) column.leftMargin = dp(5);
+                legend.addView(key, column);
+                add(key, label(tr(line.label), 11, line.color, true), 0);
+                readings[i] = label("—", 12, TEXT, false);
+                add(key, readings[i], 2);
+            }
+            add(this, legend, 6);
+        }
+
+        void update() {
+            double max = scale.minimum;
+            for (int i = 0; i < lines.length; i++) {
+                Metric metric = lines[i].metric;
+                setTextIfChanged(readings[i], format(history.latest(metric)));
+                if (scale == Scale.PERCENT) continue;
+                for (int sample = 0; sample < history.count(); sample++) {
+                    double value = history.get(metric, sample);
+                    if (!Double.isNaN(value)) max = Math.max(max, value * 1.12);
+                }
+            }
+            setTextIfChanged(upperBound, format(max));
+            chart.max = max;
+            chart.invalidate();
+        }
+
+        private String format(double value) {
+            if (Double.isNaN(value)) return "—";
+            switch (scale) {
+                case PERCENT: return String.format(locale, "%.1f %%", value);
+                case RATE: return speed(Math.round(value));
+                case MILLIS: return String.format(locale, "%.2f ms", value);
+                default: return String.format(locale, "%.2f", value);
+            }
+        }
+    }
+
     private final class Chart extends View {
         final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        final int first, second, color, secondary;
-        final boolean fixed;
+        final Path path = new Path();
+        final Line[] lines;
+        double max;
 
-        Chart(int first, int second, int color, int secondary, boolean fixed) {
+        Chart(Line[] lines) {
             super(MainActivity.this);
-            this.first = first;
-            this.second = second;
-            this.color = color;
-            this.secondary = secondary;
-            this.fixed = fixed;
+            this.lines = lines;
+            setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
         }
 
         @Override protected void onDraw(Canvas canvas) {
-            float height = getHeight() - dp(3);
-            float width = getWidth() - dp(2);
+            float top = dp(3);
+            float bottom = getHeight() - top;
+            float width = getWidth() - dp(3);
             paint.setColor(BORDER);
             paint.setStrokeWidth(dp(1));
             for (int i = 0; i < 3; i++) {
-                float y = dp(2) + (height - dp(2)) * i / 2;
+                float y = top + (bottom - top) * i / 2;
                 canvas.drawLine(0, y, width, y, paint);
             }
-            if (samples == 0) return;
-            double max = fixed ? 100 : 1024;
-            if (!fixed) {
-                for (int i = 0; i < samples; i++) {
-                    int index = (next - samples + i + HISTORY) % HISTORY;
-                    max = Math.max(max, Math.max(history[first][index], history[second][index]) * 1.12);
-                }
-            }
-            trace(canvas, first, color, width, height, max, true);
-            if (second >= 0) trace(canvas, second, secondary, width, height, max, false);
+            if (max <= 0) return;
+            for (Line line : lines) trace(canvas, line, top, bottom, width);
         }
 
-        private void trace(Canvas canvas, int series, int tint, float width, float height, double max, boolean fill) {
-            Path line = new Path();
-            float start = width * (HISTORY - samples) / (HISTORY - 1);
-            float y = height;
-            for (int i = 0; i < samples; i++) {
-                int index = (next - samples + i + HISTORY) % HISTORY;
-                float x = width * (HISTORY - samples + i) / (HISTORY - 1);
-                y = (float) (height - (height - dp(2)) * history[series][index] / max);
-                if (i == 0) line.moveTo(x, y);
-                else line.lineTo(x, y);
+        private void trace(Canvas canvas, Line line, float top, float bottom, float width) {
+            path.rewind();
+            paint.setColor(line.color);
+            boolean previous = false;
+            int count = history.count();
+            for (int i = 0; i < count; i++) {
+                double value = history.get(line.metric, i);
+                if (Double.isNaN(value)) {
+                    previous = false;
+                    continue;
+                }
+                float x = width * (DashboardHistory.CAPACITY - count + i) / (DashboardHistory.CAPACITY - 1);
+                float y = (float) (bottom - (bottom - top) * Math.min(1, value / max));
+                if (previous) path.lineTo(x, y);
+                else path.moveTo(x, y);
+                if (!previous || i == count - 1) {
+                    paint.setStyle(Paint.Style.FILL);
+                    canvas.drawCircle(x, y, dp(2), paint);
+                }
+                previous = true;
             }
-            paint.setStyle(Paint.Style.FILL);
-            if (fill && samples > 1) {
-                Path area = new Path(line);
-                area.lineTo(width, height);
-                area.lineTo(start, height);
-                area.close();
-                paint.setShader(new LinearGradient(0, 0, 0, height,
-                        (tint & 0xffffff) | 0x55000000, (tint & 0xffffff) | 0x05000000, Shader.TileMode.CLAMP));
-                canvas.drawPath(area, paint);
-                paint.setShader(null);
-            }
-            paint.setColor(tint);
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(dp(2));
+            paint.setStrokeCap(Paint.Cap.ROUND);
             paint.setStrokeJoin(Paint.Join.ROUND);
-            canvas.drawPath(line, paint);
+            canvas.drawPath(path, paint);
             paint.setStyle(Paint.Style.FILL);
-            canvas.drawCircle(width, y, dp(2), paint);
         }
     }
 

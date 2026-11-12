@@ -44,11 +44,12 @@ L’identité TLS reste dans `identity.pem`. En cas de changement d’identité 
 
 ## Métriques
 
-- **Processeur** et **mémoire** affichent l’utilisation et jusqu’à 60 relevés. Touchez **Mémoire** pour voir la RAM libre, disponible et utilisée, le cache de fichiers, les tampons, la mémoire noyau, la mémoire partagée, les pages en attente d’écriture et le swap. La RAM utilisée est `MemTotal − MemAvailable`. Certaines valeurs se recouvrent.
+- **Processeur** affiche le pourcentage d’utilisation et la charge moyenne Linux à 1 minute sur deux échelles distinctes.
+- **Mémoire** trace la RAM utilisée (`MemTotal − MemAvailable`), la mémoire partagée (`Shmem`) et le cache (`Cached`) en pourcentage de la RAM totale. Certaines valeurs se recouvrent. Touchez la carte pour voir la RAM libre et disponible, les tampons, la mémoire noyau, les pages en attente d’écriture et le swap.
 - **Réseau** ouvre toutes les interfaces Linux, y compris les interfaces virtuelles, la boucle locale et les interfaces inactives. Chaque fiche indique l’état de la liaison, les adresses, le MTU, les débits et les compteurs cumulés. La carte du tableau de bord cumule les interfaces IPv4 de diffusion actives autorisées par la configuration.
-- **Stockage** ouvre l’inventaire des périphériques bloc, y compris les disques, partitions et volumes logiques. Touchez un périphérique pour voir les débits, les IOPS, les latences moyennes, le temps occupé, la profondeur de file et les compteurs cumulés. Les latences sont indiquées quand des opérations se sont terminées pendant le dernier intervalle. Les compteurs des disques et de leurs partitions peuvent se recouvrir.
+- **Stockage** affiche l’espace du système de fichiers sélectionné par `--disk` et les débits et latences de lecture et d’écriture de la machine. Les courbes d’E/S agrègent les disques entiers pour éviter le double comptage des partitions. Les latences sont pondérées par les IOPS et la courbe présente une interruption en l’absence d’opération terminée. Touchez la carte pour ouvrir l’inventaire des périphériques bloc, puis un périphérique pour voir ses débits, IOPS, latences, temps occupé, profondeur de file et compteurs cumulés.
 
-Le tableau de bord de base reste compatible avec la version 0.1. Les pages détaillées nécessitent le serveur 0.2 ou ultérieur.
+Les courbes conservent jusqu’à 60 relevés. Les pages détaillées et les courbes de mémoire partagée, de cache et d’E/S disque nécessitent le serveur 0.2 ou ultérieur. Le tableau de bord de base reste compatible avec la version 0.1.
 
 ## Compilation et tests
 

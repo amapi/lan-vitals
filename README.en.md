@@ -44,11 +44,12 @@ The TLS identity stays in `identity.pem`. If the server identity changes, forget
 
 ## Metrics
 
-- **CPU** and **Memory** show usage and up to 60 samples. Tap **Memory** to see free, available and used RAM, file cache, buffers, kernel memory, shared memory, pages pending writeback, and swap. Used RAM is `MemTotal − MemAvailable`. Some values overlap.
+- **CPU** plots utilization and the Linux 1-minute load average on separate scales.
+- **Memory** plots used RAM (`MemTotal − MemAvailable`), shared memory (`Shmem`), and cache (`Cached`) as a percentage of total RAM. Some values overlap. Tap the card to see free and available RAM, buffers, kernel memory, pages pending writeback, and swap.
 - **Network** opens all Linux interfaces, including virtual, loopback, and inactive interfaces. Each card shows link status, addresses, MTU, rates, and cumulative counters. The dashboard card aggregates active broadcast-capable IPv4 interfaces allowed by the configuration.
-- **Storage** opens the block device inventory, including disks, partitions, and logical volumes. Tap a device for throughput, IOPS, average latencies, busy time, queue depth, and cumulative counters. Latency is displayed when operations complete during the latest interval. Disk and partition counters can overlap.
+- **Storage** shows space on the filesystem selected by `--disk` alongside machine-wide read and write throughput and latency. The I/O charts aggregate whole disks to avoid counting partitions twice. Latencies are weighted by IOPS, and the chart has a gap when no operations complete. Tap the card for the block device inventory, then tap a device for its throughput, IOPS, latency, busy time, queue depth, and cumulative counters.
 
-The basic dashboard remains compatible with version 0.1. Detail pages require server 0.2 or later.
+Charts retain up to 60 samples. Detail pages and the shared-memory, cache, and disk I/O charts require server 0.2 or later. The basic dashboard remains compatible with version 0.1.
 
 ## Building and testing
 

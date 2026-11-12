@@ -33,7 +33,7 @@
     <string name="days_hours">%1$d d %2$d h</string>
     <string name="hours_minutes">%1$d h %2$d min</string>
     <string name="minutes">%1$d min</string>
-    <string name="cpu_details">%1$d logical CPUs  ·  1 min load %2$s</string>
+    <string name="cpu_details">%1$d logical CPUs</string>
     <string name="ram_details">%1$s used of %2$s</string>
     <string name="disk_details">%1$s available  ·  %2$s</string>
     <string name="send">↑ %1$s  ·  Upload</string>
@@ -88,4 +88,14 @@
     <string name="device_partition">Partition</string>
     <string name="device_loop">Loop device</string>
     <string name="device_optical">Optical drive</string>
+    <string name="cpu_utilization">Utilization</string>
+    <string name="cpu_load">1 min load</string>
+    <string name="ram_percent">Share of RAM</string>
+    <string name="series_used">Used</string>
+    <string name="series_load">Load</string>
+    <string name="series_shared">Shared</string>
+    <string name="series_cache">Cache</string>
+    <string name="throughput">Throughput</string>
+    <string name="disk_throughput">I/O throughput</string>
+    <string name="disk_latency">I/O latency</string>
 </resources>

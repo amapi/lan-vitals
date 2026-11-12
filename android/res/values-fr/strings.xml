@@ -33,7 +33,7 @@
     <string name="days_hours">%1$d j %2$d h</string>
     <string name="hours_minutes">%1$d h %2$d min</string>
     <string name="minutes">%1$d min</string>
-    <string name="cpu_details">%1$d processeurs logiques  ·  Charge 1 min %2$s</string>
+    <string name="cpu_details">%1$d processeurs logiques</string>
     <string name="ram_details">%1$s utilisés sur %2$s</string>
     <string name="disk_details">%1$s disponibles  ·  %2$s</string>
     <string name="send">↑ %1$s  ·  Émission</string>
@@ -88,4 +88,14 @@
     <string name="device_partition">Partition</string>
     <string name="device_loop">Périphérique loop</string>
     <string name="device_optical">Lecteur optique</string>
+    <string name="cpu_utilization">Utilisation</string>
+    <string name="cpu_load">Charge à 1 min</string>
+    <string name="ram_percent">Part de la RAM</string>
+    <string name="series_used">Utilisée</string>
+    <string name="series_load">Charge</string>
+    <string name="series_shared">Partagée</string>
+    <string name="series_cache">Cache</string>
+    <string name="throughput">Débits</string>
+    <string name="disk_throughput">Débits E/S</string>
+    <string name="disk_latency">Latence E/S</string>
 </resources>
