@@ -51,6 +51,16 @@ L’identité TLS reste dans `identity.pem`. En cas de changement d’identité 
 
 Les courbes conservent jusqu’à 60 relevés. Les pages détaillées et les courbes de mémoire partagée, de cache et d’E/S disque nécessitent le serveur 0.2 ou ultérieur. Le tableau de bord de base reste compatible avec la version 0.1.
 
+## Captures d’écran
+
+### Tableau de bord
+
+![Tableau de bord Android avec les courbes CPU, mémoire, réseau et stockage](docs/screenshots/dashboard-fr.png)
+
+### Détail d’un disque
+
+![Détail d’un disque avec les débits, IOPS et latences en lecture et en écriture](docs/screenshots/disk-fr.png)
+
 ## Compilation et tests
 
 Installez un JDK 17, Android SDK Platform 36, Android Build Tools 36.0.0 et `zip`. Le client utilise les vues Android natives.

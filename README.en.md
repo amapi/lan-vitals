@@ -51,6 +51,16 @@ The TLS identity stays in `identity.pem`. If the server identity changes, forget
 
 Charts retain up to 60 samples. Detail pages and the shared-memory, cache, and disk I/O charts require server 0.2 or later. The basic dashboard remains compatible with version 0.1.
 
+## Screenshots
+
+### Dashboard
+
+![Android dashboard with CPU, memory, network, and storage charts](docs/screenshots/dashboard-en.png)
+
+### Disk details
+
+![Disk details showing read and write throughput, IOPS, and latency](docs/screenshots/disk-en.png)
+
 ## Building and testing
 
 Install JDK 17, Android SDK Platform 36, Android Build Tools 36.0.0, and `zip`. The client uses native Android views.
