@@ -37,12 +37,12 @@ import javax.net.ssl.X509TrustManager;
 
 final class LanClient implements Runnable {
     interface Listener {
-        void status(String message);
+        void status(int message);
         Endpoint choose(List<Endpoint> servers) throws InterruptedException;
         boolean confirm(Endpoint server, String fingerprint) throws InterruptedException;
-        void paired(String fingerprint);
+        void authenticated(String fingerprint, String password);
         void metrics(JSONObject values);
-        void stopped(String message);
+        void stopped(int message);
     }
 
     static final class Endpoint {
@@ -94,18 +94,18 @@ final class LanClient implements Runnable {
         try {
             boolean connected = false;
             while (!closed) {
-                listener.status(connected ? "Reconnexion au serveur…" : "Recherche sur le réseau local…");
+                listener.status(connected ? R.string.reconnect : R.string.search);
                 List<Endpoint> servers = discover();
                 if (closed) return;
                 if (servers.isEmpty()) {
-                    listener.status("Aucun serveur détecté. Nouvelle recherche…");
+                    listener.status(R.string.not_found);
                     Thread.sleep(1500);
                     continue;
                 }
                 if (pin == null && servers.size() > 1) {
                     Endpoint choice = listener.choose(servers);
                     if (choice == null) {
-                        listener.stopped("Connexion annulée.");
+                        listener.stopped(R.string.cancelled_connection);
                         return;
                     }
                     servers = java.util.Collections.singletonList(choice);
@@ -118,17 +118,17 @@ final class LanClient implements Runnable {
                     } catch (DifferentIdentity error) {
                         otherIdentity = true;
                     } catch (Stop error) {
-                        listener.stopped(error.getMessage());
+                        listener.stopped(error.message);
                         return;
                     } catch (InterruptedException error) {
                         throw error;
                     } catch (Exception error) {
-                        if (!closed) listener.status("Connexion interrompue. Nouvelle tentative…");
+                        if (!closed) listener.status(R.string.interrupted);
                     }
                 }
                 connected = pin != null;
                 if (otherIdentity && !closed) {
-                    listener.status("Serveur appairé indisponible. Vérifiez son empreinte ou oubliez l’appairage.");
+                    listener.status(R.string.different_identity);
                 }
                 Thread.sleep(1500);
             }
@@ -212,17 +212,18 @@ final class LanClient implements Runnable {
     }
 
     private void stream(Endpoint endpoint) throws Exception {
+        // L’empreinte enregistrée ou vérifiée explicitement protège le mot de passe.
         // Trust is established by the stored pin or explicit fingerprint verification
         // before any application data leaves this device.
         SSLContext context = SSLContext.getInstance("TLS");
         context.init(null, new TrustManager[]{new X509TrustManager() {
             @Override public void checkServerTrusted(X509Certificate[] chain, String algorithm)
                     throws CertificateException {
-                if (chain == null || chain.length != 1) throw new CertificateException("Identité TLS invalide");
+                if (chain == null || chain.length != 1) throw new CertificateException("Invalid TLS identity");
                 chain[0].checkValidity();
             }
             @Override public void checkClientTrusted(X509Certificate[] chain, String algorithm)
-                    throws CertificateException { throw new CertificateException("Certificat client inattendu"); }
+                    throws CertificateException { throw new CertificateException("Unexpected client certificate"); }
             @Override public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
         }}, null);
         try (Socket raw = endpoint.network.getSocketFactory().createSocket()) {
@@ -245,18 +246,16 @@ final class LanClient implements Runnable {
                 String fingerprint = hex.toString();
                 if (pin != null && !pin.equals(fingerprint)) throw new DifferentIdentity();
                 if (pin == null && !listener.confirm(endpoint, fingerprint.substring(0, 35))) {
-                    throw new Stop("Appairage annulé.");
+                    throw new Stop(R.string.cancelled_pairing);
                 }
                 if (closed) return;
-                JSONObject request = new JSONObject().put("password", password);
+                JSONObject request = new JSONObject().put("password", password).put("details", true);
                 tls.getOutputStream().write((request + "\n").getBytes(StandardCharsets.UTF_8));
                 tls.getOutputStream().flush();
                 BufferedReader reader = new BufferedReader(new InputStreamReader(tls.getInputStream(), StandardCharsets.UTF_8));
-                if (!"ok".equals(readMessage(reader).getString("type"))) throw new Stop("Mot de passe incorrect.");
-                if (pin == null) {
-                    pin = fingerprint;
-                    listener.paired(pin);
-                }
+                if (!"ok".equals(readMessage(reader).getString("type"))) throw new Stop(R.string.wrong_password);
+                pin = fingerprint;
+                listener.authenticated(pin, password);
                 while (!closed) {
                     JSONObject values = readMessage(reader);
                     if ("metrics".equals(values.getString("type"))) listener.metrics(values);
@@ -269,17 +268,18 @@ final class LanClient implements Runnable {
 
     private static JSONObject readMessage(BufferedReader reader) throws Exception {
         StringBuilder message = new StringBuilder();
-        for (int i = 0; i < 8192; i++) {
+        for (int i = 0; i < 1_048_576; i++) {
             int character = reader.read();
             if (character == -1) throw new EOFException();
             if (character == '\n') return new JSONObject(message.toString());
             message.append((char) character);
         }
-        throw new IOException("Message trop long");
+        throw new IOException("Message too long");
     }
 
     private static final class DifferentIdentity extends Exception {}
     private static final class Stop extends Exception {
-        Stop(String message) { super(message); }
+        final int message;
+        Stop(int message) { this.message = message; }
     }
 }

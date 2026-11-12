@@ -18,6 +18,7 @@ mapfile -t sources < <(find "$source_dir/src" -name '*.java' | sort)
     --java "$build_dir" -o "$build_dir/resources.apk" "$build_dir/resources.zip"
 javac -encoding UTF-8 --release 8 -classpath "$sdk" -d "$build_dir/classes" \
     "$build_dir/fr/lanvitals/R.java" "${sources[@]}"
+# Archive les classes générées, puis ajoute le DEX à un APK de ressources neuf.
 # Jar only the generated classes, then add the DEX to a fresh resource APK.
 jar cf "$build_dir/classes.jar" -C "$build_dir/classes" .
 "$tools/d8" --release --min-api 23 --lib "$sdk" --output "$build_dir" "$build_dir/classes.jar"

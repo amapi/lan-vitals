@@ -1,17 +1,19 @@
 # LAN Vitals
 
-Tableau de bord Android pour suivre un PC Linux en direct sur le même réseau local. Affiche le processeur, la mémoire, les débits réseau, l’espace disque et le temps de fonctionnement. Les relevés arrivent environ chaque seconde. Sur tablette, les cartes s’affichent sur deux colonnes lorsque la largeur le permet.
+[English documentation](README.en.md)
+
+Tableau de bord Android pour suivre un PC Linux sur le même réseau local. Les mesures sont actualisées environ chaque seconde. Sur tablette, le tableau de bord passe à deux colonnes lorsque l’écran est assez large.
 
 ## Démarrage
 
-1. Téléchargez le script Linux et l’APK signé depuis [Releases](https://github.com/amapi/lan-vitals/releases).
-2. Sur le PC, avec Python 3, OpenSSL (1.1.1+) et `ip` (iproute2) disponibles, lancez le serveur avec votre mot de passe.
+1. Téléchargez le serveur Linux et l’APK signé depuis [Releases](https://github.com/amapi/lan-vitals/releases). Le serveur utilise Python 3, OpenSSL 1.1.1 ou ultérieur, `ip` (iproute2) et `lsblk` (util-linux). L’APK requiert Android 6.0 ou ultérieur.
+2. Sur le PC, lancez le serveur avec votre mot de passe.
 
    ```bash
    python3 lan-vitals-server --password 'votre-mot-de-passe'
    ```
 
-   Cette variante évite de laisser le mot de passe dans l’historique du shell et les arguments du processus.
+   Pour éviter que le mot de passe apparaisse dans l’historique du shell ou les arguments du processus, utilisez cette variante.
 
    ```bash
    (read -rs -p 'Mot de passe LAN Vitals : ' LAN_VITALS_PASSWORD
@@ -20,25 +22,37 @@ Tableau de bord Android pour suivre un PC Linux en direct sur le même réseau l
     python3 lan-vitals-server)
    ```
 
-3. Installez l’APK sur Android 6.0 ou ultérieur. Connectez la tablette au même réseau IPv4 que le PC, ouvrez LAN Vitals, saisissez le même mot de passe et touchez **Trouver le serveur**.
-4. Au premier appairage, vérifiez que l’empreinte affichée sur la tablette correspond à celle du terminal du PC. Confirmez la correspondance pour autoriser l’envoi du mot de passe.
+3. Connectez la tablette au même réseau IPv4 que le PC. Installez et ouvrez LAN Vitals, puis saisissez le même mot de passe et touchez **Trouver le serveur**.
+4. Au premier appairage, comparez l’empreinte sur la tablette à celle du terminal du PC. Confirmez la correspondance pour autoriser l’envoi du mot de passe.
 
-Le serveur conserve son identité TLS dans `~/.local/state/lan-vitals/identity.pem` par défaut. Si vous changez de serveur ou régénérez ce fichier, utilisez **Oublier l’appairage** avant d’enregistrer la nouvelle empreinte. Le client conserve l’empreinte après authentification. Il garde le mot de passe en mémoire le temps de la session pour les reconnexions.
+Les drapeaux 🇫🇷 et 🇬🇧 changent la langue de l’application immédiatement. Le client mémorise la langue et, après authentification, le mot de passe chiffré avec une clé Android Keystore. Il se reconnecte automatiquement au lancement. Utilisez **Déconnecter** pour revenir à l’écran de connexion et **Oublier l’appairage** pour effacer le mot de passe et l’empreinte mémorisés.
 
-## Réseau et options
+## Configuration du serveur
 
-La découverte utilise la diffusion UDP IPv4 sur le port **48321**. Le flux chiffré utilise le port TCP **48322** par défaut. Le PC peut être en Ethernet et la tablette en Wi-Fi si les deux partagent le même sous-réseau. Si la découverte échoue, vérifiez les règles du pare-feu du PC et l’isolation des clients Wi-Fi, fréquente sur les réseaux invités.
+Après un démarrage réussi, le serveur enregistre ses paramètres dans `$XDG_CONFIG_HOME/lan-vitals/config.json` ou, par défaut, `~/.config/lan-vitals/config.json`. Ce fichier privé est créé avec le mode `0600`. Il contient un vérificateur salé PBKDF2-SHA-256 et aucun mot de passe en clair. Relancez le serveur sans argument pour réutiliser la configuration par défaut. Une option fournie sur la ligne de commande remplace la valeur mémorisée. Pour le mot de passe, `--password` est prioritaire sur `LAN_VITALS_PASSWORD`, qui est prioritaire sur la configuration.
 
-- `--bind 192.168.1.10` limite le flux à une adresse IPv4 locale. Par défaut, le serveur accepte les clients de ses sous-réseaux IPv4 actifs.
-- `--port 48323` change le port TCP annoncé aux clients. Le port de découverte reste fixe.
-- `--disk /mnt/data` affiche l’espace du système de fichiers contenant ce chemin.
-- `--state-dir chemin` change le dossier de l’identité TLS.
+| Option | Effet |
+| --- | --- |
+| `--lang fr` ou `--lang en` | Langue de l’aide et des messages du serveur. Français par défaut. |
+| `--config chemin` | Sélectionne un autre fichier. Répétez cette option au redémarrage pour réutiliser ce fichier. |
+| `--bind 192.168.1.10` | Limite l’écoute TCP et les clients autorisés à cette adresse et son sous-réseau. |
+| `--port 48323` | Modifie le port TCP annoncé aux clients. Par défaut, `48322`. |
+| `--disk /mnt/data` | Sélectionne le système de fichiers résumé dans la carte **Stockage**. Par défaut, `/`. |
+| `--state-dir chemin` | Modifie le dossier de l’identité TLS. Par défaut, `~/.local/state/lan-vitals`, ou sous `$XDG_STATE_HOME`. |
 
-Le processeur et les débits utilisent les deltas des compteurs Linux. La mémoire utilisée exclut la mémoire récupérable comptabilisée dans `MemAvailable`. Les débits cumulent les interfaces Ethernet et Wi-Fi actives ayant une adresse IPv4 de diffusion, y compris les interfaces virtuelles répondant à ces critères. Les graphiques affichent jusqu’à 60 relevés.
+L’identité TLS reste dans `identity.pem`. En cas de changement d’identité du serveur, effacez l’appairage côté client et vérifiez la nouvelle empreinte. La découverte utilise le port UDP **48321**. Le PC peut être en Ethernet et la tablette en Wi-Fi s’ils partagent le même sous-réseau. Si la découverte échoue, vérifiez le pare-feu du PC et l’isolation des clients du réseau Wi-Fi.
 
-## Compiler l’APK
+## Métriques
 
-Prérequis Linux de compilation : JDK 17, Android SDK Platform 36, Android Build Tools 36.0.0 et `zip`. Le client utilise les vues Android natives et ne télécharge aucune dépendance applicative.
+- **Processeur** et **mémoire** affichent l’utilisation et jusqu’à 60 relevés. Touchez **Mémoire** pour voir la RAM libre, disponible et utilisée, le cache de fichiers, les tampons, la mémoire noyau, la mémoire partagée, les pages en attente d’écriture et le swap. La RAM utilisée est `MemTotal − MemAvailable`. Certaines valeurs se recouvrent.
+- **Réseau** ouvre toutes les interfaces Linux, y compris les interfaces virtuelles, la boucle locale et les interfaces inactives. Chaque fiche indique l’état de la liaison, les adresses, le MTU, les débits et les compteurs cumulés. La carte du tableau de bord cumule les interfaces IPv4 de diffusion actives autorisées par la configuration.
+- **Stockage** ouvre l’inventaire des périphériques bloc, y compris les disques, partitions et volumes logiques. Touchez un périphérique pour voir les débits, les IOPS, les latences moyennes, le temps occupé, la profondeur de file et les compteurs cumulés. Les latences sont indiquées quand des opérations se sont terminées pendant le dernier intervalle. Les compteurs des disques et de leurs partitions peuvent se recouvrir.
+
+Le tableau de bord de base reste compatible avec la version 0.1. Les pages détaillées nécessitent le serveur 0.2 ou ultérieur.
+
+## Compilation et tests
+
+Installez un JDK 17, Android SDK Platform 36, Android Build Tools 36.0.0 et `zip`. Le client utilise les vues Android natives.
 
 ```bash
 keytool -genkeypair -alias lan-vitals -keyalg RSA -keysize 3072 \
@@ -47,14 +61,7 @@ export ANDROID_HOME=/chemin/vers/android-sdk
 export LAN_VITALS_KEYSTORE=/chemin/vers/lan-vitals.p12
 export LAN_VITALS_KEYSTORE_PASSWORD_FILE=/chemin/vers/fichier-mot-de-passe
 android/build.sh
-```
-
-Le fichier de mot de passe contient le mot de passe du keystore sur sa première ligne. Gardez-le et le keystore hors du dépôt. Réutilisez la même clé pour signer les mises à jour d’une installation existante. Le script affiche le chemin de l’APK.
-
-## Tester le serveur
-
-```bash
 python3 tests/smoke.py
 ```
 
-Le test requiert une interface IPv4 active et les ports de découverte et de flux libres. Il vérifie la découverte, la continuité du certificat, le rejet d’un mauvais mot de passe et la réception de plusieurs relevés.
+Le fichier de mot de passe contient celui du keystore sur sa première ligne. Conservez les deux fichiers hors du dépôt et réutilisez la même clé pour les mises à jour. Le test nécessite une interface IPv4 active. Il vérifie la découverte, le flux TLS, la configuration au redémarrage et les métriques, notamment le calcul des E/S disque.
